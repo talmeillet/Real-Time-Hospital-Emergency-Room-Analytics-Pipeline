@@ -1,0 +1,106 @@
+services:
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+    networks:
+      - hospital-net
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - hospital-net
+
+  mongodb:
+    image: mongo:latest
+    container_name: mongodb
+    ports:
+      - "27018:27017"
+    networks:
+      - hospital-net
+
+  redis:
+    image: redis:latest
+    container_name: redis
+    ports:
+      - "6379:6379"
+    networks:
+      - hospital-net
+
+  # --- DATA INGESTION TIER ---
+  # Paced reader that simulates real-time arrivals every 10 seconds.
+  producer:
+    build: .
+    container_name: producer
+    command: python producer.py
+    depends_on:
+      - kafka
+    restart: always
+    volumes:
+      - .:/app
+    working_dir: /app
+    networks:
+      - hospital-net
+
+  # --- STORAGE & STREAMING TIER ---
+  # Archives records to MongoDB and updates Redis high-speed counters.
+  consumer:
+    build: .
+    container_name: consumer
+    command: python consumer.py
+    restart: always
+    depends_on:
+      - kafka
+      - mongodb
+      - redis
+    volumes:
+      - .:/app
+    working_dir: /app
+    networks:
+      - hospital-net
+
+  # --- BIG DATA ANALYTICS TIER ---
+  # Dedicated container for PySpark processing. 
+  # Set to 'tail' to allow manual spark-submit as per CLI requirements.
+  spark:
+    build: .
+    container_name: spark
+    command: tail -f /dev/null
+    depends_on:
+      - mongodb
+    volumes:
+      - .:/app
+    working_dir: /app
+    ports:
+      - "4040:4040" # Spark UI for monitoring jobs.
+    networks:
+      - hospital-net
+
+  # --- VISUALIZATION TIER ---
+  # Streamlit Dashboard for real-time KPI monitoring.
+  dashboard:
+    build: .
+    container_name: dashboard
+    command: streamlit run dashboard.py --server.port=8501 --server.address=0.0.0.0
+    depends_on:
+      - redis
+    volumes:
+      - .:/app
+    working_dir: /app
+    ports:
+      - "8501:8501"
+    networks:
+      - hospital-net
+
+networks:
+  hospital-net:
+    driver: bridge
